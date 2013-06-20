@@ -1,0 +1,29 @@
+Files:
+remotebackup.sh	- Main Script
+dropbox_uploader.sh - https://github.com/andreafabrizi/Dropbox-Uploader
+remotebackup.cfg - Main Config file
+remotebackup_servers.cfg - Servers and Files list
+
+Author: Michael Connors
+Date: June 20, 2013
+Email: daddyfix [at] outlook [dot] com
+
+Description:
+This is a bash script I wrote to backup files and folders from remote Raspberry Pi devices I service for customers.
+It used Rsync through SSH (Port 22) to get the files onto the local machine.
+
+The remotehost must have your SSH Authorized Key for connection or you will be prompted with password for every rsync command. 
+eg. cat ~/.ssh/id_rsa.pub | ssh user@host 'cat >> ~/.ssh/authorized_keys'
+or
+eg. http://www.howtogeek.com/66776/how-to-remotely-copy-files-over-ssh-without-entering-your-password/
+
+It compresses and uploads the file to Dropbox. Please read how to set up the dropbox_uploader.sh script from the link above.
+
+Then emails a copy of the log and ends.
+
+Usage:
+remotebackup.sh [user@one.remote.host.com] - backups one server with the remotebackup_servers.cfg files list
+
+remotebackup.sh - backs up ALL servers and files found in the remotebackup_servers.cfg
+
+Please check the cfg files for your setup.
