@@ -14,8 +14,8 @@
 # Load Config Files
 #
 #
-CONFIGS=( 		'remote-backup.cfg'
-	  		'remotebackup-servers.cfg' )
+CONFIGS=( 	'remotebackup.cfg'
+	  	'remotebackup_servers.cfg' )
 echo "Reading config files...." >&2
 for conf in "${CONFIGS[@]}"
 do
@@ -65,7 +65,7 @@ function safeRunCommand {
 #
 # Establish Log file
 # 
-# LOGFILE="get-configs-$(date +%Y%m%d).log"
+# LOGFILE="$(date +%Y%m%d).log"
 #
 LOG="$LOGPATH/$LOGFILE"
 # Check log path
@@ -81,31 +81,41 @@ exec 2> >(tee -a $LOG >&2)
 
 # -----------------------------------------------------------------------
 #
+# Verify Save Directory exists
+# 
+#
+# Check path
+if [ ! -d "$SAVEDIR" ]; then
+	safeRunCommand "mkdir $SAVEDIR" "Making Save Folder: ${YELLOW}$SAVEDIR${RESTORE}"
+fi
+
+# -----------------------------------------------------------------------
+#
 # Loop Through Server and get files
 #
 #
 function getFiles {
-	# Arguments to pass (array files, string remotehost, string saveDirectory)
-	#typeset FILESARRAY=$FILES
-	#echo -e "files array size is ${#FILES[@]} "
-	typeset REMOTEHOST="$2"
-	typeset OUTDIR="$3"
-	#OUTDIR="$CURRDIR$SAVEDIR${2#*@}"
 
-	# make dir USED WHEN USING SCP ** NO LONGER NEEDED
-	#safeRunCommand "mkdir $OUTDIR"
+	# Exclude the path to saved files
+	typeset excluded="$OUTDIR"
+
+	# Arguments to pass ( files is a string separated by spaces, string remotehost, string saveDirectory)
+	IFS=' ' read -a assets <<< "${1}"
+	typeset remotehost="$2"
+	typeset outdir="$3"
 
 	# Loop through files and scp download
-	for onefile in "${FILES[@]}"
+	for onefile in "${assets[@]}"
 	do
 		# getDirectory="scp -r -i /root/.ssh/id_rsa $REMOTEHOST:$onefile $OUTDIR/"
 		# safeRunCommand $getDirectory
-		#safeRunCommand "scp -o ConnectTimeout=5 -r -i /root/.ssh/id_rsa $REMOTEHOST:$onefile $OUTDIR/" "Getting: ${YELLOW}$onefile${RESTORE}"
+		#echo -en  "\nscp -o ConnectTimeout=5 -r -i /root/.ssh/id_rsa $REMOTEHOST:$onefile $OUTDIR/" "Getting: ${YELLOW}$onefile${RESTORE}"
+		#return 0
 		
 		if [ "$DEBUG" = "ON" ]; then
-			safeRunCommand "rsync -avzR --timeout=5 -e 'ssh -i /root/.ssh/id_rsa' $REMOTEHOST:$onefile $OUTDIR/" "Getting: ${YELLOW}$onefile${RESTORE}"
+			safeRunCommand "rsync -avzR --timeout=5 --exclude '$excluded' --exclude '*.gz' -e 'ssh -i /root/.ssh/id_rsa' $remotehost:$onefile $outdir/" "Getting: ${YELLOW}$onefile${RESTORE}"
 		else
-			safeRunCommand "rsync -azR --timeout=5 -e 'ssh -i /root/.ssh/id_rsa' $REMOTEHOST:$onefile $OUTDIR/" "Getting: ${YELLOW}$onefile${RESTORE}"
+			safeRunCommand "rsync -azR --timeout=5 --exclude '$excluded' --exclude '*.gz' -e 'ssh -i /root/.ssh/id_rsa' $remotehost:$onefile $outdir/" "Getting: ${YELLOW}$onefile${RESTORE}"
 		fi
 	done
 }
@@ -118,7 +128,7 @@ function getFiles {
 function checkServer {
 	typeset server=$1
 	#$SERVERSTATE="closed"
-	#SERVERSTATE=$(nmap $server -PN -p ssh | egrep 'open|closed|filtered')
+	#echo -en "\nSERVERSTATE=nmap $server -PN -p ssh | egrep 'open|closed|filtered'"
 	echo -en "\n\nChecking Port 22: "
 	serverupdown=$(nmap $server -PN -p ssh | egrep 'open|closed|filtered')
 
@@ -217,9 +227,9 @@ function ask {
 function cleanLogNEmail {
 	#${string/pattern/replacement}
 	# Strip COLOR CODES in the log. I like color.
-	safeRunCommand "sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' $LOG > temp.log" "Cleaning log"
+	safeRunCommand "sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' $LOG > temp.log" "Cleaning log: $LOG"
 	safeRunCommand "mv temp.log $LOG" "Saving cleaned log file"
-	safeRunCommand "$MYMAIL" "Emailing log to ${YELLOW}$TO_ADDR${RESTORE}"
+	safeRunCommand "$MYMAIL" "Emailing $LOG to ${YELLOW}$TO_ADDR${RESTORE}"
 }
 
 # -----------------------------------------------------------------------
@@ -231,32 +241,17 @@ function cleanLogNEmail {
 if [ "$1" = "--help" ]
 then
 	echo -en "${GREEN}"
-	echo -e 'Usage: get-pi-configs.sh\n'
+	echo -e 'Usage: remotebackup.sh\n'
 	echo -en "${RESTORE}"
-	echo 'This script downloads the following files using Rsync'
+	echo 'This script downloads the following files from servers using Rsync'
 	
-	# Display List of Files
-	echo -e '\nFiles List'
-	echo -en "${YELLOW}"
-	for f in "${FILES[@]}"
+	# Display List of Servers with File list
+	for i in "${!SERVERS2D[@]}"
 	do
-		echo -e $f >&2
+		echo -en "\n\n$i\nFiles: ${YELLOW}${SERVERS2D[$i]}${RESTORE}"
 	done
 
-	echo -en "${GREEN}"
-	echo -e '\nfrom the following servers'
-	echo -en "${RESTORE}"
-
-	# Display List of Serverss
-	echo -e '\nServers List'
-	echo -en "${YELLOW}"
-	for s in "${SERVERS[@]}"
-	do
-		echo -e $s >&2
-	done
-	echo -en "${RESTORE}"
-
-	echo -e '\nFor ONE SERVER ONLY:'
+	echo -e '\nFor ONE SERVER ONLY use the following. Files list is used from remotebackup_servers.cfg:'
 	echo -e 'Usage: get-pi-configs.sh [root@someserver.com]'
 
 	echo -en "${YELLOW}"
@@ -268,31 +263,20 @@ fi
 # -----------------------------------------------------------------------
 #
 # If number of Arguments passed is NOT equal to 1 then
-# assume back of all servers
+# assume backup of all servers
 #
 #
 if [ $# -ne 1 ]
 then
 	echo -en "Debugger: ${YELLOW}$DEBUG${RESTORE}"
-	echo -e '\n\nServer List'
-	echo -en "${YELLOW}"
-	# Display List of Servers
-	for server in "${SERVERS[@]}"
-	do
-		echo -e $server >&2
-	done
-	echo -en "${RESTORE}"
 
-	echo -e '\nFiles List'
-	echo -en "${YELLOW}"
-	# Display List of Files
-	for fl in "${FILES[@]}"
-	do
-		echo -e $fl >&2
-	done
-	echo -en "${RESTORE}"
+        # Display List of Servers with File list
+        for i in "${!SERVERS2D[@]}"
+        do
+                echo -en "\n$i\nFiles: ${YELLOW}${SERVERS2D[$i]}${RESTORE}"
+        done
 
-	echo -en "\nBackup Path: ${YELLOW}$OUTDIR[servername]${RESTORE}\n\n"
+	echo -en "\n\nBackup Path: ${YELLOW}$OUTDIR[servername]${RESTORE}\n\n"
 
 	if [ "$DEBUG" = "ON" ]; then
 		if ! ask "Backup Files from these Servers to the Path?" Y; then
@@ -322,6 +306,20 @@ fi
 #
 # 
 
+#TEST OF 2D ARRAY --------------
+#for i in "${!SERVERS2D[@]}"
+#do
+#  echo "key  : $i"
+#  IFS=' ' read -a assets <<< "${SERVERS2D[$i]}"
+#  for asset in "${assets[@]}"
+#  do
+#  		echo "Server: $i, $asset"
+#  done
+#  echo "value: ${servers[$i]}"
+#done
+#exit
+# END TEST-----------------------
+
 # First check that we have all the programs needed to run the script
 echo -en "------------------------------------------------------------\nChecking for installed programs..." >&2
 for needed in "${PROGRAMS[@]}"
@@ -335,24 +333,35 @@ then
 	SERVERNAME=${REMOTEHOST#*@}
 	SERVERPATH="$OUTDIR$SERVERNAME"
 
-	# prepare one file for tarball
 	SAVECONFIG=$SAVEDIR$SERVERNAME
+	# prepare one file for tarball by replacing [oneserver] with $Servername
 	TAR=${TARONESERVER/'[oneserver]'/$SERVERNAME}
-	#echo -e "OUTDIR with HOSTNAME IS ->$SERVERPATH"
-	#exit
+
 	# It doesnt matter what SKIP is. We are only doing one HOST
 	displayHeader $REMOTEHOST $SERVERPATH
-	#echo -e "SKIP HOST=$SKIPHOST"
-	#echo -e "files array size is ${#FILES[@]} "
 
 	# Check if Server is awake on port 22 for SSH
 	checkServer $SERVERNAME
-	#echo -en "\nState : $SERVERSTATE" >&2
-	#wait
 
 	if [[ "$SERVERSTATE" == "open" ]]; then
 		echo -e "\n" >&2
-		getFiles $FILES $REMOTEHOST $SERVERPATH
+
+		GOTFILES=0
+		# check if the server is in the array of servers list.
+		#   If found then backup the files noted
+		#   If not found then use the FILES noted in cfg
+		for i in "${!SERVERS2D[@]}"
+		do
+			if [[ "$i" == "$REMOTEHOST" ]]; then
+				echo -en "${LRED}*** Found server in cfg, using files found. ***${RESTORE}\n"
+				getFiles "${SERVERS2D[$i]}" $REMOTEHOST $SERVERPATH
+				GOTFILES=1
+				break
+			fi
+		done
+		if [ $GOTFILES -eq 0 ]; then
+			getFiles "$FILES" $REMOTEHOST $SERVERPATH
+		fi
 	else
 		if [[ "$SERVERSTATE" == *filtered* ]]; then
 			serverClosed="filtered"
@@ -362,39 +371,39 @@ then
 			serverClosed=$SERVERSTATE
 		fi
 		echo -en "\nServer ${LRED}$serverClosed${RESTORE}. Exiting...\n" >&2
-		#cleanLogNEmail
 		wait
 		exit 1
 	fi
 else
+        TAR=$TARCOMPRESSED
+        SAVECONFIG=$SAVEDIR
+
 	# Loop thorugh Servers
-	for server in "${SERVERS[@]}"
+	for server in "${!SERVERS2D[@]}"
 	do
 		REMOTEHOST=${server#*@}
 		SERVERPATH="$OUTDIR$REMOTEHOST"
-
-		TAR=$TARCOMPRESSED
-		SAVECONFIG=$SAVEDIR
 
 		#echo -e "OUTDIR with HOSTNAME IS ->$SERVERPATH"
 		displayHeader $server $SERVERPATH
 
 		# Check if Server is awake on port 22 for SSH
 		checkServer $REMOTEHOST
-		#SERVERSTATE=$(nmap $REMOTEHOST -PN -p ssh | egrep 'open|closed|filtered')
-		#sleep .5
-		#echo -en "Server State : $SERVERSTATE" >&2	
+		#echo -en "Server State : $SERVERSTATE" >&2
 
 		if [[ "$SERVERSTATE" == *open* ]]; then
+
+			# We leave the string of files alone, we will parse it in getFiles
+
 			echo -e "\n" >&2
 			if [ "$DEBUG" = "ON" ]; then
 				if ask "Skip?" N; then
 					echo -e "Skipping Server: $server\n" >&2
 				else
-					getFiles $FILES $server $SERVERPATH
+					getFiles "${SERVERS2D[$server]}" $server $SERVERPATH
 				fi
 			else
-				getFiles $FILES $server $SERVERPATH
+				getFiles "${SERVERS2D[$server]}" $server $SERVERPATH
 			fi
 		else
 			if [[ "$SERVERSTATE" == *filtered* ]]; then
@@ -421,7 +430,7 @@ echo -e "\n-------------------------------------------------------" >&2
 safeRunCommand "tar $options $TAR $SAVECONFIG" "Compressing: ${YELLOW}$SAVECONFIG as $TAR${RESTORE}"
 
 # Copy backup to Dropbox
-#checkProg $DROPBOXSCRIPT
+#   checkProg $DROPBOXSCRIPT
 safeRunCommand "dropbox_uploader.sh upload $TAR '$DROPBOXFOLDER$TAR'" "Uploading to Dropbox: ${YELLOW}$DROPBOXFOLDER$TAR${RESTORE}"
 
 # Email the log results
