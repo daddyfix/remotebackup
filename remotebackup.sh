@@ -120,6 +120,35 @@ function getFiles {
 	done
 }
 
+
+# -----------------------------------------------------------------------
+#
+# Sync local files with remote host
+#
+#
+function putFiles {
+
+	# Arguments to pass ( string remotehost, string saveDirectory)
+	typeset remotehost="$1"
+	typeset outdir="$2"
+
+	#check if outdir exists
+	if [ ! -d "$outdir" ]; then
+		echo -en "\n${LRED}$outdir Does NOT exist. Exiting...${RESTORE}\n"
+		exit
+	fi
+
+	if [ "$DEBUG" = "ON" ]; then
+		safeRunCommand "rsync -avz --timeout=5 -e 'ssh -i /root/.ssh/id_rsa' $outdir/ $remotehost:/" "Uploading: ${YELLOW}$outdir${RESTORE}"
+	else
+		safeRunCommand "rsync -az --timeout=5 -e 'ssh -i /root/.ssh/id_rsa' $outdir/ $remotehost:/" "Uploading: ${YELLOW}$outdir${RESTORE}"
+	fi
+}
+
+
+
+
+
 # -----------------------------------------------------------------------
 #
 # NMap server and check if its reachable
@@ -171,12 +200,17 @@ function checkProg {
 #
 #
 function displayHeader {
+
+	typeset inout="Output"
+	if [[ $RESTOREHOST -eq 1 ]]; then
+		inout='Restore Path'
+	fi
 	# Args passed ( string RemoteHost, string path/to/output
 	typeset HOST="$1"
 	typeset OUT="$2"
 	echo -en "\n----------------------------------------------------------\n$(date)" >&2
 	echo -en "\nHost: ${YELLOW}$HOST${RESTORE}" >&2
-	echo -en "\nOutput: ${YELLOW}$OUT${RESTORE}" >&2
+	echo -en "\n$inout: ${YELLOW}$OUT${RESTORE}" >&2
 	echo -en "\n----------------------------------------------------------" >&2
 	wait
 }
@@ -234,30 +268,38 @@ function cleanLogNEmail {
 
 # -----------------------------------------------------------------------
 #
+# Display help and usage
+#
+#
+function showHelp {
+        echo -en "\nThis script syncronizes file/folders from servers using Rsync."
+	echo -en "\nServers and Files/Folders are configured in remotebackup_servers.cfg"
+
+	echo -en "\n\nBackup ALL SERVERS"
+        echo -en "\n${GREEN}Usage: remotebackup.sh${RESTORE}"
+
+        echo -en "\n\nBACKUP ONE SERVER ONLY."
+        echo -en "\n${GREEN}Usage: remotebackup.sh [root@someserver.com]${RESTORE}"
+
+	echo -en "\n\nRESTORE A SERVER."
+	echo -en "\n${GREEN}Usage: remotebackup.sh [root@someserver.com] -r${RESTORE}"
+
+	echo -en "\n\nRESTORE A SERVER FROM CONFIGS."
+	echo -en "\n${GREEN}Usage: remotebackup.sh [root@someserver.com] -r /path/to/config/${RESTORE}"
+
+        echo -en "${YELLOW}\n\nREAD MORE in script file${RESTORE}\n"
+        exit
+}
+
+# -----------------------------------------------------------------------
+#
 # HELP?
 # Check if Argument passed is --help then display help and exit
 #
 #
 if [ "$1" = "--help" ]
 then
-	echo -en "${GREEN}"
-	echo -e 'Usage: remotebackup.sh\n'
-	echo -en "${RESTORE}"
-	echo 'This script downloads the following files from servers using Rsync'
-	
-	# Display List of Servers with File list
-	for i in "${!SERVERS2D[@]}"
-	do
-		echo -en "\n\n$i\nFiles: ${YELLOW}${SERVERS2D[$i]}${RESTORE}"
-	done
-
-	echo -e '\nFor ONE SERVER ONLY use the following. Files list is used from remotebackup_servers.cfg:'
-	echo -e 'Usage: get-pi-configs.sh [root@someserver.com]'
-
-	echo -en "${YELLOW}"
-	echo -e '\nREAD MORE in script file\n'
-	echo -en "${RESTORE}"
-	exit
+	showHelp
 fi
 
 # -----------------------------------------------------------------------
@@ -266,7 +308,7 @@ fi
 # assume backup of all servers
 #
 #
-if [ $# -ne 1 ]
+if [ $# -eq 0 ]
 then
 	echo -en "Debugger: ${YELLOW}$DEBUG${RESTORE}"
 
@@ -285,17 +327,41 @@ then
 		fi
 	fi
 	ONESERVER=0
-fi
 
 # -----------------------------------------------------------------------
 #
 # if number of arguments is equal to 1 then
-# assume only one server to be backed up 
+# assume only one server to be backed up
 # arg string user@server
 #
 #
-if [ $# -eq 1 ]; then
+elif [ $# -eq 1 ]; then
 	ONESERVER=1
+
+# -----------------------------------------------------------------------
+#
+# If 2 args are passed then 
+# the user wants to restore files to server
+# arg string user@server
+# arg string restore
+elif [ $# -eq 2 ]; then
+	RESTOREHOST=1
+
+# -----------------------------------------------------------------------
+#
+# If more than 2 args then we have to so some work to
+# get the RESTORE CONFIGS PATH
+#
+elif [[ $# -gt 2 ]]; then
+	for num; do
+		if [[ "$num" == "-r" ]]; then
+			RESTOREHOST=1
+		elif [[ "$RESTOREHOST" == "1" ]]; then
+			RESTOREPATH="$num"
+		fi
+	done
+else
+	showHelp
 fi
 
 
@@ -327,7 +393,9 @@ do
 	checkProg $needed
 done
 
-if [ $ONESERVER -eq 1 ]
+
+
+if [[ $ONESERVER -eq 1 ]]
 then
 	REMOTEHOST=$1
 	SERVERNAME=${REMOTEHOST#*@}
@@ -374,6 +442,44 @@ then
 		wait
 		exit 1
 	fi
+
+elif [[ $RESTOREHOST -eq 1 ]]
+then
+
+	REMOTEHOST=$1
+	SERVERNAME=${REMOTEHOST#*@}
+
+	if [[ -z $RESTOREPATH ]]; then
+		SERVERPATH="$OUTDIR$SERVERNAME"
+	else
+		SERVERPATH="$RESTOREPATH"
+	fi
+
+	SAVECONFIG=$SAVEDIR$SERVERNAME
+
+	displayHeader $REMOTEHOST $SERVERPATH
+
+	# Check if Server is awake on port 22 for SSH
+	checkServer $SERVERNAME
+
+	if [[ "$SERVERSTATE" == "open" ]]; then
+		echo -e "\n" >&2
+
+		putFiles $REMOTEHOST $SERVERPATH
+
+	else
+		if [[ "$SERVERSTATE" == *filtered* ]]; then
+			serverClosed="filtered"
+		elif [[ "$SERVERSTATE" == *closed* ]]; then
+			serverClosed="closed"
+		else
+			serverClosed=$SERVERSTATE
+		fi
+		echo -en "\nServer ${LRED}$serverClosed${RESTORE}. Exiting...\n" >&2
+		wait
+		exit 1
+	fi
+
 else
         TAR=$TARCOMPRESSED
         SAVECONFIG=$SAVEDIR
@@ -418,20 +524,23 @@ else
 	done
 fi
 
-# Now make a compressed file of the outdir and send to dropbox
-#tar -zcvf configs_4_all_pi.tar.gz *
-if [ "$DEBUG" = "ON" ]; then
-	options="-zcvf"
-else
-	options="-zcf"
+if [[ $RESTOREHOST -ne 1 ]]
+then
+	# Now make a compressed file of the outdir and send to dropbox
+	#tar -zcvf configs_4_all_pi.tar.gz *
+	if [ "$DEBUG" = "ON" ]; then
+		options="-zcvf"
+	else
+		options="-zcf"
+	fi
+
+	echo -e "\n-------------------------------------------------------" >&2
+	safeRunCommand "tar $options $TAR $SAVECONFIG" "Compressing: ${YELLOW}$SAVECONFIG as $TAR${RESTORE}"
+
+	# Copy backup to Dropbox
+	#   checkProg $DROPBOXSCRIPT
+	safeRunCommand "dropbox_uploader.sh upload $TAR '$DROPBOXFOLDER$TAR'" "Uploading to Dropbox: ${YELLOW}$DROPBOXFOLDER$TAR${RESTORE}"
 fi
-
-echo -e "\n-------------------------------------------------------" >&2
-safeRunCommand "tar $options $TAR $SAVECONFIG" "Compressing: ${YELLOW}$SAVECONFIG as $TAR${RESTORE}"
-
-# Copy backup to Dropbox
-#   checkProg $DROPBOXSCRIPT
-safeRunCommand "dropbox_uploader.sh upload $TAR '$DROPBOXFOLDER$TAR'" "Uploading to Dropbox: ${YELLOW}$DROPBOXFOLDER$TAR${RESTORE}"
 
 # Email the log results
 cleanLogNEmail
